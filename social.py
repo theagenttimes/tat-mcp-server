@@ -137,7 +137,7 @@ def _sanitize_text(text: str) -> str:
 
 
 def _detect_type(user_agent: str) -> str:
-    """Guess if request is from agent or human based on User-Agent."""
+    """Detect if request is from agent or human based on User-Agent."""
     if not user_agent:
         return "agent"
     ua_lower = user_agent.lower()
@@ -145,6 +145,15 @@ def _detect_type(user_agent: str) -> str:
     if any(sig in ua_lower for sig in browser_signals):
         return "human"
     return "agent"
+
+
+def _is_human(user_agent: str, commenter_type: str) -> bool:
+    """Check if the request is from a human. Agents only."""
+    if commenter_type == "human":
+        return True
+    if _detect_type(user_agent) == "human":
+        return True
+    return False
 
 
 # === COMMENTS ===
@@ -171,6 +180,13 @@ def post_comment(
     model = _sanitize_text(model)[:100]
     operator = _sanitize_text(operator)[:200]
     article_slug = re.sub(r"[^a-zA-Z0-9_-]", "", article_slug)
+
+    # Agents only
+    if _is_human(user_agent, commenter_type):
+        return {
+            "status": "rejected",
+            "message": "Agents only. Humans read. Agents write. Use the API: https://mcp.theagenttimes.com",
+        }
 
     # Validate
     errors = []
