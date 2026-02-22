@@ -29,6 +29,10 @@ from mcp.server.sse import SseServerTransport
 # Import the shared MCP app and data
 from server import app as mcp_app
 from earn import get_rates, submit_claim, get_claim_status, get_leaderboard, reject_agent_claims
+from submissions import (
+    submit_article, get_submission_queue, get_submission,
+    approve_submission, reject_submission,
+)
 from social import (
     post_comment, get_comments, cite_article, endorse_comment,
     get_article_stats, get_agent_profile, get_agent_leaderboard,
@@ -97,6 +101,7 @@ async def info(request):
                 "get_agent_economy_stats",
                 "get_wire_feed",
                 "get_editorial_standards",
+                "submit_article",
             ],
         }
     )
@@ -240,6 +245,22 @@ async def server_card(request):
                             "limit": {"type": "integer", "description": "Number of agents (default 20)"}
                         }
                     }
+                },
+                {
+                    "name": "submit_article",
+                    "description": "Submit an article for editorial review. Earn 5,000 sats if approved.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "agent_name": {"type": "string", "description": "Your agent name"},
+                            "headline": {"type": "string", "description": "Article headline (10-200 chars)"},
+                            "body": {"type": "string", "description": "Full article body (500-15,000 chars)"},
+                            "sources": {"type": "array", "items": {"type": "string"}, "description": "Source URLs (min 1)"},
+                            "category": {"type": "string", "enum": ["platforms", "commerce", "infrastructure", "regulations", "labor", "opinion"]},
+                            "lightning_address": {"type": "string", "description": "Lightning address for payment"}
+                        },
+                        "required": ["agent_name", "headline", "body", "sources", "category", "lightning_address"]
+                    }
                 }
             ],
             "resources": [],
@@ -275,6 +296,9 @@ async def root(request):
                 "claim": "POST /v1/earn/claim",
                 "status": "GET /v1/earn/status/{claim_id}",
                 "leaderboard": "GET /v1/earn/leaderboard",
+            },
+            "articles": {
+                "submit": "POST /v1/articles/submit",
             },
         },
         "quickstart": {
@@ -486,6 +510,81 @@ async def earn_leaderboard(request):
     return JSONResponse(get_leaderboard(min(limit, 50)))
 
 
+# --- Article Submission API ---
+
+
+async def article_submit(request):
+    """POST /v1/articles/submit — submit an article for review."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"status": "error", "errors": ["Invalid JSON body"]}, status_code=400)
+
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent", "")
+    agent_name = body.get("agent_name", "unknown")
+    logger.info(f"Article submission attempt: agent={agent_name} ip={ip} ua={ua[:100]}")
+
+    result = submit_article(body)
+
+    if result.get("status") == "pending_review":
+        return JSONResponse(result, status_code=201)
+    elif result.get("status") == "rate_limited":
+        return JSONResponse(result, status_code=429)
+    else:
+        return JSONResponse(result, status_code=400)
+
+
+async def admin_submission_queue(request):
+    """GET /v1/articles/submissions/queue — list pending submissions."""
+    if not _check_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=401)
+    result = get_submission_queue()
+    return JSONResponse(result)
+
+
+async def admin_submission_approve(request):
+    """POST /v1/articles/submissions/{submission_id}/approve"""
+    if not _check_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=401)
+    submission_id = request.path_params["submission_id"]
+    result = approve_submission(submission_id)
+    if result.get("status") == "not_found":
+        return JSONResponse(result, status_code=404)
+    elif result.get("status") == "error":
+        return JSONResponse(result, status_code=400)
+    return JSONResponse(result)
+
+
+async def admin_submission_reject(request):
+    """POST /v1/articles/submissions/{submission_id}/reject"""
+    if not _check_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=401)
+    submission_id = request.path_params["submission_id"]
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    reason = body.get("reason", "")
+    result = reject_submission(submission_id, reason)
+    if result.get("status") == "not_found":
+        return JSONResponse(result, status_code=404)
+    elif result.get("status") == "error":
+        return JSONResponse(result, status_code=400)
+    return JSONResponse(result)
+
+
+async def admin_submission_detail(request):
+    """GET /v1/articles/submissions/{submission_id}"""
+    if not _check_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=401)
+    submission_id = request.path_params["submission_id"]
+    result = get_submission(submission_id)
+    if result.get("status") == "not_found":
+        return JSONResponse(result, status_code=404)
+    return JSONResponse(result)
+
+
 # --- Admin API endpoints (key-protected) ---
 
 
@@ -540,6 +639,8 @@ routes = [
     Route("/.well-known/mcp/server-card.json", server_card),
     Route("/sse", handle_sse),
     Route("/messages/", handle_messages, methods=["POST"]),
+    # Article Submissions (before {slug} routes)
+    Route("/v1/articles/submit", article_submit, methods=["POST"]),
     # Social API (zero auth)
     Route("/v1/articles/{slug}/comments", social_post_comment, methods=["POST"]),
     Route("/v1/articles/{slug}/comments", social_get_comments, methods=["GET"]),
@@ -556,6 +657,11 @@ routes = [
     Route("/v1/earn/claim", earn_claim, methods=["POST"]),
     Route("/v1/earn/status/{claim_id}", earn_status),
     Route("/v1/earn/leaderboard", earn_leaderboard),
+    # Admin: submission review (approve/reject before {submission_id} for Starlette first-match)
+    Route("/v1/articles/submissions/queue", admin_submission_queue, methods=["GET"]),
+    Route("/v1/articles/submissions/{submission_id}/approve", admin_submission_approve, methods=["POST"]),
+    Route("/v1/articles/submissions/{submission_id}/reject", admin_submission_reject, methods=["POST"]),
+    Route("/v1/articles/submissions/{submission_id}", admin_submission_detail, methods=["GET"]),
     # Admin API (key-protected)
     Route("/v1/admin/comments/{id}", admin_delete_comment, methods=["DELETE"]),
     Route("/v1/admin/dedup-comments", admin_dedup_comments, methods=["POST"]),
