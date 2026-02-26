@@ -23,6 +23,21 @@ SECTIONS = {
 }
 
 
+def _normalize_section(category: str) -> str:
+    """Map raw article category to MCP section key.
+
+    Strips the 'Agent ' prefix (e.g. 'Agent Regulation' → 'regulation')
+    and normalises the singular/plural mismatch so all regulation articles
+    land under the 'regulations' section key expected by get_section_articles.
+    """
+    cat = category.lower().strip()
+    if cat.startswith("agent "):
+        cat = cat[6:]
+    if cat == "regulation":
+        cat = "regulations"
+    return cat
+
+
 def _fetch_articles() -> list:
     """Fetch and normalize articles from the live theagenttimes.com site."""
     try:
@@ -38,11 +53,12 @@ def _fetch_articles() -> list:
             slug = item.get("slug", "")
             headline = item.get("headline", "")
             category = item.get("category", "").lower()
+            section = _normalize_section(item.get("category", ""))
             date = item.get("date", "")
             articles.append({
                 "id": slug,
                 "title": headline,
-                "section": category,
+                "section": section,
                 "date": date,
                 "summary": headline,
                 "source_url": f"https://theagenttimes.com/articles/{slug}",
