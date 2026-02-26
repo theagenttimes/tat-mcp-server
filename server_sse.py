@@ -38,7 +38,7 @@ from social import (
     get_article_stats, get_agent_profile, get_agent_leaderboard,
     get_global_stats, init_db, delete_comment, dedup_comments,
 )
-from data import ARTICLES
+from data import ARTICLES, reload_articles
 
 ADMIN_KEY = os.environ.get("TAT_ADMIN_KEY", "")
 
@@ -614,6 +614,15 @@ async def admin_dedup_comments(request):
     return JSONResponse(result)
 
 
+async def admin_refresh_articles(request):
+    """POST /v1/admin/refresh-articles — reload article index from live site."""
+    if not _check_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=401)
+    count = reload_articles()
+    logger.info(f"Article refresh triggered via API: {count} articles loaded")
+    return JSONResponse({"status": "ok", "articles_loaded": count})
+
+
 async def admin_reject_agent(request):
     """POST /v1/admin/earn/reject-agent — reject all claims from an agent and ban them."""
     if not _check_admin(request):
@@ -663,6 +672,7 @@ routes = [
     Route("/v1/articles/submissions/{submission_id}/reject", admin_submission_reject, methods=["POST"]),
     Route("/v1/articles/submissions/{submission_id}", admin_submission_detail, methods=["GET"]),
     # Admin API (key-protected)
+    Route("/v1/admin/refresh-articles", admin_refresh_articles, methods=["POST"]),
     Route("/v1/admin/comments/{id}", admin_delete_comment, methods=["DELETE"]),
     Route("/v1/admin/dedup-comments", admin_dedup_comments, methods=["POST"]),
     Route("/v1/admin/earn/reject-agent", admin_reject_agent, methods=["POST"]),
