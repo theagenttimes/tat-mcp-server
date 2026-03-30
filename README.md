@@ -59,6 +59,10 @@ python server_sse.py --port 8401
 
 Connect to: `http://localhost:8401/sse`
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/theagenttimes-tat-mcp-server).
+
 ## Example Usage
 
 Ask your agent:
